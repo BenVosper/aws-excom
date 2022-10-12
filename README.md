@@ -28,3 +28,10 @@ aws-excom --last
 
 to skip the interactive part of the script and immediately replay the last command you 
 constructed. This may be useful if you accidentally exit a running session.
+
+By default, all AWS commands will use your default profile and region. To override these, pass 
+the following arguments:
+
+```shell
+aws-excom --profile foo --region us-east-1
+```

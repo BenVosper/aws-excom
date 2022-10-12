@@ -25,6 +25,13 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--last", action="store_true", help="Run 'execute-command' with last input"
 )
+parser.add_argument(
+    "--profile", default=None, help="(Optional) Name of AWS profile to use"
+)
+parser.add_argument(
+    "--region", default=None, help="(Optional) Name of AWS region to use"
+)
+
 
 LAST_RUN_FILENAME_PREFIX = ".aws-excom-last-run"
 TEMPDIR = tempfile.gettempdir()
@@ -83,8 +90,8 @@ def get_container_display_names(containers):
     )
 
 
-def build_aws_cli_command():
-    session = get_boto_session()
+def build_aws_cli_command(profile_name=None, region_name=None):
+    session = get_boto_session(profile_name, region_name)
     client = get_ecs_client(session)
     cluster_arns = get_cluster_arns(client)
     clusters = get_clusters_data(client, cluster_arns)
@@ -122,17 +129,24 @@ def build_aws_cli_command():
     prompt = colored("Type command to execute... (Default: 'bash')", attrs=["bold"])
     command = input(prompt) or "bash"
     print(f"Command: '{command}'")
-    return (
+    command = (
         f"aws ecs execute-command "
         f"--task {selected_container_data['taskArn']} "
         f"--cluster {selected_cluster_arn} "
         f"--interactive "
-        f"--command '{command}'"
+        f"--command '{command}' "
     )
+    if profile_name:
+        command += f"--profile {profile_name} "
+    if region_name:
+        command += f"--region {region_name} "
+    return command
 
 
 def main():
     args = parser.parse_args()
+    profile = args.profile
+    region = args.region
 
     last_run_command = get_last_run_command()
 
@@ -142,7 +156,7 @@ def main():
             sys.exit(0)
         aws_cli_command = last_run_command
     else:
-        aws_cli_command = build_aws_cli_command()
+        aws_cli_command = build_aws_cli_command(profile, region)
 
     cleanup_last_run_files()
     write_last_run_file(aws_cli_command)
