@@ -18,5 +18,5 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/benvosper/sampleproject"
-"Bug Tracker" = "https://github.com/pypa/sampleproject/issues"
+"Homepage" = "https://github.com/benvosper/aws-excom/"
+"Bug Tracker" = "https://github.com/pypa/aws-excom/issues/"
