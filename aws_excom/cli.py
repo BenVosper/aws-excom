@@ -1,0 +1,155 @@
+import argparse
+import os
+import sys
+import tempfile
+import readline  # Needed for correct 'input' behaviour
+
+from subprocess import run
+
+from simple_term_menu import TerminalMenu
+from termcolor import cprint, colored
+
+from aws_excom.aws import (
+    get_boto_session,
+    get_ecs_client,
+    get_cluster_arns,
+    get_clusters_data,
+    get_task_arns,
+    get_tasks_data,
+    get_containers_data,
+)
+
+parser = argparse.ArgumentParser(
+    description="Interactive script to call 'aws ecs execute-command'"
+)
+parser.add_argument(
+    "--last", action="store_true", help="Run 'execute-command' with last input"
+)
+
+LAST_RUN_FILENAME_PREFIX = ".aws-excom-last-run"
+TEMPDIR = tempfile.gettempdir()
+
+
+def get_last_run_file_paths():
+    return [
+        os.path.join(TEMPDIR, name)
+        for name in filter(
+            lambda filename: filename.startswith(LAST_RUN_FILENAME_PREFIX),
+            os.listdir(TEMPDIR),
+        )
+    ]
+
+
+def get_last_run_command():
+    last_run_file_paths = get_last_run_file_paths()
+    last_run_command = None
+    if last_run_file_paths:
+        with open(last_run_file_paths[0]) as f:
+            last_run_command = f.read()
+    return last_run_command
+
+
+def cleanup_last_run_files():
+    for path in get_last_run_file_paths():
+        os.remove(path)
+
+
+def write_last_run_file(command):
+    with tempfile.NamedTemporaryFile(
+        "w",
+        dir=TEMPDIR,
+        prefix=LAST_RUN_FILENAME_PREFIX,
+        delete=False,
+    ) as f:
+        f.write(command)
+
+
+def get_container_display_names(containers):
+    names = [container["name"] for container in containers]
+    launch_types = [container["taskLaunchType"] for container in containers]
+    statuses = [container["lastStatus"] for container in containers]
+
+    longest_name_len = len(max(names, key=len))
+    longest_launch_type_len = len(max(launch_types, key=len))
+
+    names = [name.ljust(longest_name_len) for name in names]
+    launch_types = [
+        launch_type.ljust(longest_launch_type_len) for launch_type in launch_types
+    ]
+
+    return (
+        f"{name}    {launch_type}    {status}"
+        for name, launch_type, status in zip(names, launch_types, statuses)
+    )
+
+
+def build_aws_cli_command():
+    session = get_boto_session()
+    client = get_ecs_client(session)
+    cluster_arns = get_cluster_arns(client)
+    clusters = get_clusters_data(client, cluster_arns)
+
+    cluster_names = [cluster["clusterName"] for cluster in clusters]
+
+    cprint(
+        "Select a cluster... (Arrow keys to move, Enter to select, / to search)",
+        attrs=["bold"],
+    )
+    terminal_menu = TerminalMenu(cluster_names)
+    selected_index = terminal_menu.show()
+    if not selected_index:
+        sys.exit()
+    selected_cluster_name = cluster_names[selected_index]
+    selected_cluster_data = clusters[selected_index]
+    selected_cluster_arn = selected_cluster_data["clusterArn"]
+    print(f"Cluster: {selected_cluster_name}")
+
+    task_arns = get_task_arns(client, selected_cluster_data["clusterArn"])
+    tasks = get_tasks_data(client, selected_cluster_arn, task_arns)
+    containers = get_containers_data(tasks)
+    container_names = [*get_container_display_names(containers)]
+    cprint(
+        "Select a container... (Arrow keys to move, Enter to select, / to search)",
+        attrs=["bold"],
+    )
+    terminal_menu = TerminalMenu(container_names)
+    selected_index = terminal_menu.show()
+    if not selected_index:
+        sys.exit()
+    selected_container_name = container_names[selected_index]
+    selected_container_data = containers[selected_index]
+    print(f"Container: {selected_container_name}")
+    prompt = colored("Type command to execute... (Default: 'bash')", attrs=["bold"])
+    command = input(prompt) or "bash"
+    print(f"Command: '{command}'")
+    return (
+        f"aws ecs execute-command "
+        f"--task {selected_container_data['taskArn']} "
+        f"--cluster {selected_cluster_arn} "
+        f"--interactive "
+        f"--command '{command}'"
+    )
+
+
+def main():
+    args = parser.parse_args()
+
+    last_run_command = get_last_run_command()
+
+    if args.last:
+        if not last_run_command:
+            print("No last run found. Try again with default arguments")
+            sys.exit(0)
+        aws_cli_command = last_run_command
+    else:
+        aws_cli_command = build_aws_cli_command()
+
+    cleanup_last_run_files()
+    write_last_run_file(aws_cli_command)
+
+    print("Starting session. Ctrl-D to exit.")
+    run(
+        aws_cli_command,
+        shell=True,
+        check=False,
+    )
