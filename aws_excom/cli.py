@@ -104,7 +104,7 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     )
     terminal_menu = TerminalMenu(cluster_names)
     selected_index = terminal_menu.show()
-    if not selected_index:
+    if selected_index is None:
         sys.exit()
     selected_cluster_name = cluster_names[selected_index]
     selected_cluster_data = clusters[selected_index]
@@ -121,7 +121,7 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     )
     terminal_menu = TerminalMenu(container_names)
     selected_index = terminal_menu.show()
-    if not selected_index:
+    if selected_index is None:
         sys.exit()
     selected_container_name = container_names[selected_index]
     selected_container_data = containers[selected_index]
