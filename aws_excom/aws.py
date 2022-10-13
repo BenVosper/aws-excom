@@ -26,13 +26,14 @@ def get_cluster_arns(ecs_client):
     return cluster_arns
 
 
-def get_clusters_data(ecs_client, cluster_arns):
+def get_clusters_data(ecs_client, cluster_arns, order_by="clusterName"):
     clusters = []
     for arns in grouper(cluster_arns, MAX_DESCRIBE_CLUSTERS):
         arns = [*filter(lambda arn: arn is not None, arns)]
         response = ecs_client.describe_clusters(clusters=arns)
         clusters.extend(response["clusters"])
-    return clusters
+
+    return sorted(clusters, key=lambda cluster: cluster[order_by].lower())
 
 
 def get_task_arns(ecs_client, cluster_arn):
@@ -57,10 +58,11 @@ def get_tasks_data(ecs_client, cluster_arn, task_arns):
     return tasks
 
 
-def get_containers_data(tasks_data):
+def get_containers_data(tasks_data, order_by="name"):
     containers = []
     for task in tasks_data:
         for container in task["containers"]:
             container["taskLaunchType"] = task["launchType"]
             containers.append(container)
-    return containers
+
+    return sorted(containers, key=lambda container: container[order_by].lower())

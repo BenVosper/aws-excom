@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aws-excom"
-version = "0.0.4"
+version = "0.0.5"
 authors = [
   { name="Ben Vosper", email="author@example.com" },
 ]
