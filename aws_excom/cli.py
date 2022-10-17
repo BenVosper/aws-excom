@@ -7,7 +7,7 @@ import readline  # Needed for correct 'input' behaviour
 from subprocess import run
 
 from simple_term_menu import TerminalMenu
-from termcolor import cprint, colored
+from termcolor import colored
 
 from aws_excom.aws import (
     get_boto_session,
@@ -90,6 +90,10 @@ def get_container_display_names(containers):
     )
 
 
+def get_bold_text(text):
+    return colored(text, attrs=["bold"])
+
+
 def build_aws_cli_command(profile_name=None, region_name=None):
     session = get_boto_session(profile_name, region_name)
     client = get_ecs_client(session)
@@ -98,9 +102,10 @@ def build_aws_cli_command(profile_name=None, region_name=None):
 
     cluster_names = [cluster["clusterName"] for cluster in clusters]
 
-    cprint(
-        "Select a cluster... (Arrow keys to move, Enter to select, / to search)",
-        attrs=["bold"],
+    print(
+        get_bold_text(
+            "Select a cluster... (Arrow keys to move, Enter to select, / to search)"
+        )
     )
     terminal_menu = TerminalMenu(cluster_names)
     selected_index = terminal_menu.show()
@@ -115,9 +120,11 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     tasks = get_tasks_data(client, selected_cluster_arn, task_arns)
     containers = get_containers_data(tasks)
     container_names = [*get_container_display_names(containers)]
-    cprint(
-        "Select a container... (Arrow keys to move, Enter to select, / to search)",
-        attrs=["bold"],
+
+    print(
+        get_bold_text(
+            "Select a container... (Arrow keys to move, Enter to select, / to search)"
+        )
     )
     terminal_menu = TerminalMenu(container_names)
     selected_index = terminal_menu.show()
@@ -126,10 +133,12 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     selected_container_name = container_names[selected_index]
     selected_container_data = containers[selected_index]
     print(f"Container: {selected_container_name}")
-    prompt = colored("Type command to execute... (Default: 'bash')", attrs=["bold"])
+
+    prompt = get_bold_text("Type command to execute... (Default: 'bash')")
     command = input(prompt) or "bash"
     print(f"Command: '{command}'")
-    command = (
+
+    aws_ecs_command = (
         f"aws ecs execute-command "
         f"--task {selected_container_data['taskArn']} "
         f"--cluster {selected_cluster_arn} "
@@ -137,10 +146,10 @@ def build_aws_cli_command(profile_name=None, region_name=None):
         f"--command '{command}' "
     )
     if profile_name:
-        command += f"--profile {profile_name} "
+        aws_ecs_command += f"--profile {profile_name} "
     if region_name:
-        command += f"--region {region_name} "
-    return command
+        aws_ecs_command += f"--region {region_name} "
+    return aws_ecs_command
 
 
 def main():
