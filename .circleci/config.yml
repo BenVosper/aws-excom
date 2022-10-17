@@ -21,7 +21,7 @@ workflows:
             branches:
               only: main
       - deploy:
-          context: credentials
+          context: aws-excom-deploy
           requires:
             - test
           filters:
