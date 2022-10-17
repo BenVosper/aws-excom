@@ -1,0 +1,75 @@
+version: 2.1
+
+workflows:
+  pr:
+    jobs:
+      - lint:
+          filters:
+            branches:
+              ignore:
+                - main
+      - test:
+          filters:
+            branches:
+              ignore:
+                - main
+
+  merge:
+    jobs:
+      - test:
+          filters:
+            branches:
+              only: main
+      - deploy:
+          context: aws-excom-deploy
+          requires:
+            - test
+          filters:
+            branches:
+              only: main
+
+commands:
+  install-package:
+    description: "Build and install package"
+    steps:
+      - run: pip install .
+  install-test-deps:
+    description: "Install test dependencies"
+    steps:
+      - run: pip install -r requirements-test.txt
+  install-deploy-deps:
+    description: "Install deployment dependencies"
+    steps:
+      - run: pip install -r requirements-deploy.txt
+
+jobs:
+  lint:
+    docker:
+      - image: cimg/python:3.10.2
+    steps:
+      - checkout
+      - install-test-deps
+      - run:
+          name: Lint
+          command: black --check aws_excom
+
+  test:
+    docker:
+      - image: cimg/python:3.10.2
+    steps:
+      - checkout
+      - install-package
+      - install-test-deps
+      - run:
+          name: Run python tests
+          command: pytest -v
+
+  deploy:
+    docker:
+      - image: cimg/python:3.10.2
+    steps:
+      - checkout
+      - install-deploy-deps
+      - run:
+          name: Deploy package
+          command: ./deploy.sh

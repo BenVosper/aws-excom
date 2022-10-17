@@ -8,7 +8,6 @@ def readme():
 
 setup(
     name="aws-excom",
-    version="0.0.5",
     description="Wrapper for AWS ECS Execute Command",
     long_description=readme(),
     author="Ben Vosper",
