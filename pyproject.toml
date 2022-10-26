@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aws-excom"
 version = "0.0.7"
+dependencies = ['simple-term-menu', 'termcolor', 'boto3']
 authors = [
   { name="Ben Vosper", email="author@example.com" },
 ]
@@ -16,6 +17,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+"aws-excom" = "aws_excom.cli:main"
 
 [project.urls]
 "Homepage" = "https://github.com/benvosper/aws-excom/"
