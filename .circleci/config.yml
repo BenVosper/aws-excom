@@ -72,4 +72,4 @@ jobs:
       - install-deploy-deps
       - run:
           name: Deploy package
-          command: ./deploy.sh
+          command: python deploy.py
