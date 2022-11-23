@@ -134,7 +134,7 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     selected_container_data = containers[selected_index]
     print(f"Container: {selected_container_name}")
 
-    prompt = get_bold_text("Type command to execute... (Default: 'bash')")
+    prompt = get_bold_text("Type command to execute... (Default: 'bash') ")
     command = input(prompt) or "bash"
     print(f"Command: '{command}'")
 
