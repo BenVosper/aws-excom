@@ -63,6 +63,9 @@ def get_containers_data(tasks_data, order_by="name"):
     for task in tasks_data:
         for container in task["containers"]:
             container["taskLaunchType"] = task["launchType"]
+            task_definition_arn = task["taskDefinitionArn"]
+            task_definition_revision = task_definition_arn.split(":")[-1]
+            container["taskDefinitionRevision"] = task_definition_revision
             containers.append(container)
 
     return sorted(containers, key=lambda container: container[order_by].lower())
