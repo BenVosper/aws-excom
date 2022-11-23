@@ -75,18 +75,23 @@ def get_container_display_names(containers):
     names = [container["name"] for container in containers]
     launch_types = [container["taskLaunchType"] for container in containers]
     statuses = [container["lastStatus"] for container in containers]
+    revisions = [container["taskDefinitionRevision"] for container in containers]
 
     longest_name_len = len(max(names, key=len))
     longest_launch_type_len = len(max(launch_types, key=len))
+    longest_status_len = len(max(statuses, key=len))
 
     names = [name.ljust(longest_name_len) for name in names]
     launch_types = [
         launch_type.ljust(longest_launch_type_len) for launch_type in launch_types
     ]
+    statuses = [status.ljust(longest_status_len) for status in statuses]
 
     return (
-        f"{name}    {launch_type}    {status}"
-        for name, launch_type, status in zip(names, launch_types, statuses)
+        f"{name}    {launch_type}    {status}     {revision}"
+        for name, launch_type, status, revision in zip(
+            names, launch_types, statuses, revisions
+        )
     )
 
 
