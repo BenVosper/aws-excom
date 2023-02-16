@@ -29,18 +29,14 @@ workflows:
               only: main
 
 commands:
-  install-package:
+  install-package-deploy:
     description: "Build and install package"
     steps:
-      - run: pip install .
-  install-test-deps:
-    description: "Install test dependencies"
+      - run: pip install .[deploy]
+  install-package-dev:
+    description: "Build and install package"
     steps:
-      - run: pip install -r requirements-test.txt
-  install-deploy-deps:
-    description: "Install deployment dependencies"
-    steps:
-      - run: pip install -r requirements-deploy.txt
+      - run: pip install .[dev]
 
 jobs:
   lint:
@@ -48,7 +44,7 @@ jobs:
       - image: cimg/python:3.10.2
     steps:
       - checkout
-      - install-test-deps
+      - install-package-dev
       - run:
           name: Lint
           command: black --check aws_excom
@@ -58,8 +54,7 @@ jobs:
       - image: cimg/python:3.10.2
     steps:
       - checkout
-      - install-package
-      - install-test-deps
+      - install-package-dev
       - run:
           name: Run python tests
           command: pytest -v
@@ -69,7 +64,7 @@ jobs:
       - image: cimg/python:3.10.2
     steps:
       - checkout
-      - install-deploy-deps
+      - install-package-deploy
       - run:
           name: Deploy package
           command: python deploy.py
