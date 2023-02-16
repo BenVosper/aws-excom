@@ -11,7 +11,7 @@ dependencies = [
     'boto3 >= 1.26',
 ]
 authors = [
-  { name="Ben Vosper", email="author@example.com" },
+    { name = "Ben Vosper", email = "author@example.com" },
 ]
 description = "Wrapper for AWS ECS Execute Command"
 readme = "README.md"
@@ -20,6 +20,18 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-virtualenv",
+    "black",
+    "moto",
+]
+deploy = [
+    "build",
+    "twine",
 ]
 
 [project.scripts]
