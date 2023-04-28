@@ -33,6 +33,11 @@ parser.add_argument(
 parser.add_argument(
     "--region", default=None, help="(Optional) Name of AWS region to use"
 )
+parser.add_argument(
+    "--command",
+    default=None,
+    help="(Optional) Command to execute. Leave blank for an interactive prompt",
+)
 
 
 LAST_RUN_FILENAME_PREFIX = ".aws-excom-last-run"
@@ -101,7 +106,7 @@ def get_bold_text(text):
     return colored(text, attrs=["bold"])
 
 
-def build_aws_cli_command(profile_name=None, region_name=None):
+def build_aws_cli_command(profile_name=None, region_name=None, command_to_execute=None):
     session = get_boto_session(profile_name, region_name)
     client = get_ecs_client(session)
     cluster_arns = get_cluster_arns(client)
@@ -141,9 +146,12 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     selected_container_data = containers[selected_index]
     print(f"Container: {selected_container_name}")
 
-    prompt = get_bold_text("Type command to execute... (Default: 'bash') ")
-    command = input(prompt) or "bash"
-    print(f"Command: '{command}'")
+    command = command_to_execute
+    if not command:
+        prompt = get_bold_text("Type command to execute... (Default: 'bash') ")
+        command = input(prompt) or "bash"
+
+    print(f"Command: '{command}'\n")
 
     aws_ecs_command = (
         f"aws ecs execute-command "
@@ -163,6 +171,7 @@ def main():
     args = parser.parse_args()
     profile = args.profile
     region = args.region
+    command = args.command
 
     last_run_command = get_last_run_command()
 
@@ -173,7 +182,7 @@ def main():
         aws_cli_command = last_run_command
     else:
         try:
-            aws_cli_command = build_aws_cli_command(profile, region)
+            aws_cli_command = build_aws_cli_command(profile, region, command)
         except (*BOTOCORE_EXCEPTIONS,) as error:
             print(error)
             sys.exit(1)

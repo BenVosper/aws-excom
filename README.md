@@ -36,6 +36,22 @@ the following arguments:
 aws-excom --profile foo --region us-east-1
 ```
 
+By default you'll be given an interactive prompt to enter the command to execute. To skip this, 
+you may optionally provide a '--command' argument eg.:
+
+```shell
+aws-excom --command "python3"
+```
+
+This is handy for writing aliases for common commands:
+
+```shell
+# File: aws-excom-django-python-shell.sh
+
+#!/bin/sh
+aws-excom --command "python3 manage.py shell" "$@"
+```
+
 ## Local Development
 
 Before installing the package in development mode, you may find it convenient to create a 
