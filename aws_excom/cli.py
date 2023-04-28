@@ -9,6 +9,7 @@ from subprocess import run
 from simple_term_menu import TerminalMenu
 from termcolor import colored
 
+from aws_excom import ignore_user_entered_signals
 from aws_excom.aws import (
     get_boto_session,
     get_ecs_client,
@@ -18,6 +19,7 @@ from aws_excom.aws import (
     get_tasks_data,
     get_containers_data,
 )
+from aws_excom.exceptions import BOTOCORE_EXCEPTIONS
 
 parser = argparse.ArgumentParser(
     description="Interactive script to call 'aws ecs execute-command'"
@@ -30,6 +32,11 @@ parser.add_argument(
 )
 parser.add_argument(
     "--region", default=None, help="(Optional) Name of AWS region to use"
+)
+parser.add_argument(
+    "--command",
+    default=None,
+    help="(Optional) Command to execute. Leave blank for an interactive prompt",
 )
 
 
@@ -72,6 +79,9 @@ def write_last_run_file(command):
 
 
 def get_container_display_names(containers):
+    if not containers:
+        raise AssertionError("Must provide one or more containers")
+
     names = [container["name"] for container in containers]
     launch_types = [container["taskLaunchType"] for container in containers]
     statuses = [container["lastStatus"] for container in containers]
@@ -99,7 +109,7 @@ def get_bold_text(text):
     return colored(text, attrs=["bold"])
 
 
-def build_aws_cli_command(profile_name=None, region_name=None):
+def build_aws_cli_command(profile_name=None, region_name=None, command_to_execute=None):
     session = get_boto_session(profile_name, region_name)
     client = get_ecs_client(session)
     cluster_arns = get_cluster_arns(client)
@@ -124,6 +134,9 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     task_arns = get_task_arns(client, selected_cluster_data["clusterArn"])
     tasks = get_tasks_data(client, selected_cluster_arn, task_arns)
     containers = get_containers_data(tasks)
+    if not containers:
+        print("No containers found. Exiting...")
+        sys.exit()
     container_names = [*get_container_display_names(containers)]
 
     print(
@@ -139,9 +152,12 @@ def build_aws_cli_command(profile_name=None, region_name=None):
     selected_container_data = containers[selected_index]
     print(f"Container: {selected_container_name}")
 
-    prompt = get_bold_text("Type command to execute... (Default: 'bash') ")
-    command = input(prompt) or "bash"
-    print(f"Command: '{command}'")
+    command = command_to_execute
+    if not command:
+        prompt = get_bold_text("Type command to execute... (Default: 'bash') ")
+        command = input(prompt) or "bash"
+
+    print(f"Command: '{command}'\n")
 
     aws_ecs_command = (
         f"aws ecs execute-command "
@@ -161,6 +177,7 @@ def main():
     args = parser.parse_args()
     profile = args.profile
     region = args.region
+    command = args.command
 
     last_run_command = get_last_run_command()
 
@@ -170,14 +187,19 @@ def main():
             sys.exit(0)
         aws_cli_command = last_run_command
     else:
-        aws_cli_command = build_aws_cli_command(profile, region)
+        try:
+            aws_cli_command = build_aws_cli_command(profile, region, command)
+        except (*BOTOCORE_EXCEPTIONS,) as error:
+            print(error)
+            sys.exit(1)
 
     cleanup_last_run_files()
     write_last_run_file(aws_cli_command)
 
     print("Starting session. Ctrl-D to exit.")
-    run(
-        aws_cli_command,
-        shell=True,
-        check=False,
-    )
+    with ignore_user_entered_signals():
+        run(
+            aws_cli_command,
+            shell=True,
+            check=False,
+        )
