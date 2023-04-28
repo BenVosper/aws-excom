@@ -9,6 +9,7 @@ from subprocess import run
 from simple_term_menu import TerminalMenu
 from termcolor import colored
 
+from aws_excom import ignore_user_entered_signals
 from aws_excom.aws import (
     get_boto_session,
     get_ecs_client,
@@ -181,8 +182,9 @@ def main():
     write_last_run_file(aws_cli_command)
 
     print("Starting session. Ctrl-D to exit.")
-    run(
-        aws_cli_command,
-        shell=True,
-        check=False,
-    )
+    with ignore_user_entered_signals():
+        run(
+            aws_cli_command,
+            shell=True,
+            check=False,
+        )
