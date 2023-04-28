@@ -79,6 +79,9 @@ def write_last_run_file(command):
 
 
 def get_container_display_names(containers):
+    if not containers:
+        raise AssertionError("Must provide one or more containers")
+
     names = [container["name"] for container in containers]
     launch_types = [container["taskLaunchType"] for container in containers]
     statuses = [container["lastStatus"] for container in containers]
@@ -131,6 +134,9 @@ def build_aws_cli_command(profile_name=None, region_name=None, command_to_execut
     task_arns = get_task_arns(client, selected_cluster_data["clusterArn"])
     tasks = get_tasks_data(client, selected_cluster_arn, task_arns)
     containers = get_containers_data(tasks)
+    if not containers:
+        print("No containers found. Exiting...")
+        sys.exit()
     container_names = [*get_container_display_names(containers)]
 
     print(
