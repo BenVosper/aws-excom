@@ -18,6 +18,7 @@ from aws_excom.aws import (
     get_tasks_data,
     get_containers_data,
 )
+from aws_excom.exceptions import BOTOCORE_EXCEPTIONS
 
 parser = argparse.ArgumentParser(
     description="Interactive script to call 'aws ecs execute-command'"
@@ -170,7 +171,11 @@ def main():
             sys.exit(0)
         aws_cli_command = last_run_command
     else:
-        aws_cli_command = build_aws_cli_command(profile, region)
+        try:
+            aws_cli_command = build_aws_cli_command(profile, region)
+        except (*BOTOCORE_EXCEPTIONS,) as error:
+            print(error)
+            sys.exit(1)
 
     cleanup_last_run_files()
     write_last_run_file(aws_cli_command)
