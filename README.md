@@ -52,6 +52,25 @@ This is handy for writing aliases for common commands:
 aws-excom --command "python3 manage.py shell" "$@"
 ```
 
+## Downloading files
+
+To pull a file out of a container, use the `get` subcommand with an S3 bucket to stage it 
+through:
+
+```shell
+aws-excom get /app/logs/big.log --bucket my-bucket [--output big.log]
+```
+
+Set `AWS_EXCOM_BUCKET` to avoid passing `--bucket` every time.
+
+The file is uploaded with an S3 multipart upload (up to 5 TB) using URLs presigned with 
+your local credentials, so the container needs no AWS credentials or CLI - only `sh`, `dd`, 
+`curl` and network access to S3. Each part is buffered to `$TMPDIR` (or `/tmp`) in the 
+container, so it needs at least one part's worth (16 MiB for files under ~160 GB) of free 
+space. Staged objects are deleted once downloaded. Your local credentials need 
+`s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:ListMultipartUploadParts`, 
+`s3:AbortMultipartUpload` and `s3:GetBucketLocation` on the bucket.
+
 ## Local Development
 
 Before installing the package in development mode, you may find it convenient to create a 

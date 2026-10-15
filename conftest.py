@@ -2,7 +2,7 @@ from os import environ
 
 import boto3
 import pytest
-from moto import mock_ecs
+from moto import mock_aws
 
 
 @pytest.fixture(scope="function")
@@ -20,5 +20,5 @@ def aws_credentials():
 
 @pytest.fixture(scope="function")
 def ecs(aws_credentials):
-    with mock_ecs():
+    with mock_aws():
         yield boto3.client("ecs", region_name=environ["AWS_DEFAULT_REGION"])

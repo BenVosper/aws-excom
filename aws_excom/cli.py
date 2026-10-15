@@ -4,7 +4,7 @@ import sys
 import tempfile
 import readline  # Needed for correct 'input' behaviour
 
-from subprocess import run
+from subprocess import run, PIPE
 
 from simple_term_menu import TerminalMenu
 from termcolor import colored
@@ -20,23 +20,59 @@ from aws_excom.aws import (
     get_containers_data,
 )
 from aws_excom.exceptions import BOTOCORE_EXCEPTIONS
+from aws_excom.transfer import (
+    S3Transfer,
+    TransferError,
+    get_s3_client,
+    parse_size_output,
+)
+
+
+def add_common_arguments(parser, default=None):
+    """
+    Options accepted both before and after a subcommand name. Subcommands pass
+    'argparse.SUPPRESS' so they don't overwrite values given before the subcommand.
+    """
+    parser.add_argument(
+        "--profile", default=default, help="(Optional) Name of AWS profile to use"
+    )
+    parser.add_argument(
+        "--region", default=default, help="(Optional) Name of AWS region to use"
+    )
+
 
 parser = argparse.ArgumentParser(
     description="Interactive script to call 'aws ecs execute-command'"
 )
+add_common_arguments(parser)
 parser.add_argument(
     "--last", action="store_true", help="Run 'execute-command' with last input"
-)
-parser.add_argument(
-    "--profile", default=None, help="(Optional) Name of AWS profile to use"
-)
-parser.add_argument(
-    "--region", default=None, help="(Optional) Name of AWS region to use"
 )
 parser.add_argument(
     "--command",
     default=None,
     help="(Optional) Command to execute. Leave blank for an interactive prompt",
+)
+
+subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
+
+get_parser = subparsers.add_parser(
+    "get",
+    help="Download a file from a container via S3",
+    description="Download a file from a container via S3",
+)
+add_common_arguments(get_parser, default=argparse.SUPPRESS)
+get_parser.add_argument("remote_path", help="Path of the file in the container")
+get_parser.add_argument(
+    "--bucket",
+    default=os.environ.get("AWS_EXCOM_BUCKET"),
+    help="S3 bucket to stage the download through. Defaults to $AWS_EXCOM_BUCKET",
+)
+get_parser.add_argument(
+    "--output",
+    "-o",
+    default=None,
+    help="(Optional) Local path to save to. Defaults to the remote filename",
 )
 
 
@@ -109,8 +145,7 @@ def get_bold_text(text):
     return colored(text, attrs=["bold"])
 
 
-def build_aws_cli_command(profile_name=None, region_name=None, command_to_execute=None):
-    session = get_boto_session(profile_name, region_name)
+def select_container(session):
     client = get_ecs_client(session)
     cluster_arns = get_cluster_arns(client)
     clusters = get_clusters_data(client, cluster_arns)
@@ -151,6 +186,12 @@ def build_aws_cli_command(profile_name=None, region_name=None, command_to_execut
     selected_container_name = container_names[selected_index]
     selected_container_data = containers[selected_index]
     print(f"Container: {selected_container_name}")
+    return selected_cluster_arn, selected_container_data
+
+
+def build_aws_cli_command(profile_name=None, region_name=None, command_to_execute=None):
+    session = get_boto_session(profile_name, region_name)
+    selected_cluster_arn, selected_container_data = select_container(session)
 
     command = command_to_execute
     if not command:
@@ -173,8 +214,80 @@ def build_aws_cli_command(profile_name=None, region_name=None, command_to_execut
     return aws_ecs_command
 
 
-def main():
-    args = parser.parse_args()
+def build_execute_command_args(
+    cluster_arn, container, command, profile_name=None, region_name=None
+):
+    args = [
+        "aws",
+        "ecs",
+        "execute-command",
+        "--cluster",
+        cluster_arn,
+        "--task",
+        container["taskArn"],
+        "--container",
+        container["name"],
+        "--interactive",
+        "--command",
+        command,
+    ]
+    if profile_name:
+        args += ["--profile", profile_name]
+    if region_name:
+        args += ["--region", region_name]
+    return args
+
+
+def get_file(remote_path, bucket, local_path, profile_name=None, region_name=None):
+    session = get_boto_session(profile_name, region_name)
+    s3 = get_s3_client(session, bucket)
+    cluster_arn, container = select_container(session)
+
+    def execute(command, **kwargs):
+        args = build_execute_command_args(
+            cluster_arn, container, command, profile_name, region_name
+        )
+        with ignore_user_entered_signals():
+            return run(args, check=False, **kwargs)
+
+    transfer = S3Transfer(s3, bucket, remote_path)
+    local_path = local_path or os.path.basename(remote_path)
+    try:
+        print(f"Checking size of '{remote_path}'...")
+        result = execute(transfer.get_size_command(), stdout=PIPE, text=True)
+        file_size = parse_size_output(result.stdout)
+        print(f"Size: {file_size:,} bytes")
+
+        command = transfer.prepare(file_size)
+        print(
+            f"Uploading to s3://{bucket}/{transfer.key} "
+            f"in {transfer.part_count} part(s)..."
+        )
+        execute(command)
+        transfer.complete()
+        print(f"Downloading to '{local_path}'...")
+        transfer.download(local_path)
+    finally:
+        transfer.cleanup()
+    print("Done")
+
+
+def run_get(args):
+    if not args.bucket:
+        get_parser.error("requires '--bucket' or $AWS_EXCOM_BUCKET")
+    try:
+        get_file(args.remote_path, args.bucket, args.output, args.profile, args.region)
+    except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
+        print(error)
+        sys.exit(1)
+
+
+SUBCOMMANDS = {
+    "get": run_get,
+}
+
+
+def run_execute_command(args):
     profile = args.profile
     region = args.region
     command = args.command
@@ -203,3 +316,17 @@ def main():
             shell=True,
             check=False,
         )
+
+
+def main():
+    args = parser.parse_args()
+
+    if args.subcommand:
+        if args.last or args.command:
+            parser.error(
+                f"'--last' and '--command' can't be used with '{args.subcommand}'"
+            )
+        SUBCOMMANDS[args.subcommand](args)
+        return
+
+    run_execute_command(args)
