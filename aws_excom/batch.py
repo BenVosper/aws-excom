@@ -82,6 +82,26 @@ def get_task_id(container):
     return container["taskArn"].split("/")[-1]
 
 
+def format_table(headers, rows):
+    """Lines of a plain text table, with each column padded to its widest value"""
+    widths = [
+        max(len(str(value)) for value in column) for column in zip(headers, *rows)
+    ]
+    return [
+        "  ".join(str(value).ljust(width) for value, width in zip(row, widths)).rstrip()
+        for row in (headers, *rows)
+    ]
+
+
+def get_targets_table(targets):
+    """Lines of a table of (cluster, container) targets, for confirming a run"""
+    rows = [
+        (number, cluster["clusterName"], container["name"], get_task_id(container))
+        for number, (cluster, container) in enumerate(targets, start=1)
+    ]
+    return format_table(("#", "Cluster", "Container", "Task ID"), rows)
+
+
 def get_timestamp():
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 

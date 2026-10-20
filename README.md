@@ -112,10 +112,13 @@ aws-excom batch --command "python manage.py migrate foo 0003"
 ```
 
 You'll be asked to pick one or more clusters, then one or more containers in each 
-(Space or Tab to select, Enter to accept). The command is run on each container in turn 
-by `sh`, and each container's output is saved to its own file in `batch_outputs/` (or 
-`--output-dir`), named with the run's timestamp, cluster and container. Containers with 
-the same name in the same cluster are numbered:
+(Space or Tab to select, Enter to accept). A table of the selected containers and the command 
+is then shown for you to confirm before anything runs. Pass `--no-confirm` to skip the 
+confirmation, eg. in scripts. The table is still shown.
+
+The command is run on each container in turn by `sh`, and each container's output is saved 
+to its own file in `batch_outputs/` (or `--output-dir`), named with the run's timestamp, 
+cluster and container. Containers with the same name in the same cluster are numbered:
 
 ```
 batch_outputs/

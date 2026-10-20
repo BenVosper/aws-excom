@@ -7,7 +7,9 @@ import time
 
 from aws_excom.batch import (
     build_inline_command,
+    format_table,
     get_output_paths,
+    get_targets_table,
     run_and_save,
     trim_output,
 )
@@ -75,6 +77,32 @@ def test_get_output_paths():
         "runs/20261020-120000_prod-us_gunicorn_1.txt",
         "runs/20261020-120000_prod-us_celery.txt",
         "runs/20261020-120000_prod-us_gunicorn_2.txt",
+    ]
+
+
+def test_format_table():
+    assert format_table(("#", "Name"), [(1, "gunicorn"), (10, "a")]) == [
+        "#   Name",
+        "1   gunicorn",
+        "10  a",
+    ]
+
+
+def test_get_targets_table():
+    targets = [
+        (
+            {"clusterName": "prod-eu"},
+            {"name": "gunicorn", "taskArn": "arn:aws:ecs:eu-west-1:1:task/prod-eu/abc"},
+        ),
+        (
+            {"clusterName": "prod-us-east"},
+            {"name": "celery", "taskArn": "arn:aws:ecs:us-east-1:1:task/prod-us/def"},
+        ),
+    ]
+    assert get_targets_table(targets) == [
+        "#  Cluster       Container  Task ID",
+        "1  prod-eu       gunicorn   abc",
+        "2  prod-us-east  celery     def",
     ]
 
 
