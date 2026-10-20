@@ -21,6 +21,7 @@ from aws_excom.aws import (
 from aws_excom.batch import (
     build_inline_command,
     get_output_paths,
+    get_targets_table,
     get_task_id,
     get_timestamp,
     run_and_save,
@@ -175,6 +176,11 @@ batch_parser.add_argument(
     "--output-dir",
     default="batch_outputs",
     help="(Optional) Directory to save outputs under. Defaults to 'batch_outputs'",
+)
+batch_parser.add_argument(
+    "--no-confirm",
+    action="store_true",
+    help="Run without asking for confirmation. The summary is still shown",
 )
 
 
@@ -491,6 +497,18 @@ def run_put(args):
         sys.exit(1)
 
 
+def print_batch_summary(targets, command, command_file=None):
+    lines = get_targets_table(targets)
+    print(get_bold_text(lines[0]))
+    for line in lines[1:]:
+        print(line)
+    print()
+    print(f"Command: '{command}'")
+    if command_file:
+        print(f"Command file: '{command_file}'")
+    print()
+
+
 def run_on_containers(
     command,
     command_file,
@@ -498,6 +516,7 @@ def run_on_containers(
     output_dir,
     profile_name=None,
     region_name=None,
+    ask_to_confirm=True,
 ):
     session = get_boto_session(profile_name, region_name)
     client = get_ecs_client(session)
@@ -524,7 +543,14 @@ def run_on_containers(
         if not command:
             print("No command given. Exiting...")
             sys.exit()
-    print(f"Command: '{command}'\n")
+
+    print()
+    print_batch_summary(targets, command, command_file)
+    if ask_to_confirm:
+        if not confirm(f"Run on {len(targets)} container(s)?"):
+            print("Cancelled")
+            return True
+        print()
 
     timestamp = get_timestamp()
 
@@ -583,6 +609,7 @@ def run_batch(args):
             args.output_dir,
             args.profile,
             args.region,
+            ask_to_confirm=not args.no_confirm,
         )
     except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
         print(error)

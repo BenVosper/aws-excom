@@ -56,3 +56,8 @@ def test_last_not_allowed_with_batch(capsys):
         with pytest.raises(SystemExit):
             main()
     assert "'--last' can't be used with 'batch'" in capsys.readouterr().err
+
+
+def test_batch_no_confirm():
+    assert parser.parse_args(["batch", "--no-confirm"]).no_confirm is True
+    assert parser.parse_args(["batch"]).no_confirm is False
