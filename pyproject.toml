@@ -11,7 +11,7 @@ dependencies = [
     'boto3 >= 1.26',
 ]
 authors = [
-    { name = "Ben Vosper", email = "author@example.com" },
+    { name = "Ben Vosper", email = "hi@benvosper.com" },
 ]
 description = "Wrapper for AWS ECS Execute Command"
 readme = "README.md"
