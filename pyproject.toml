@@ -34,6 +34,9 @@ deploy = [
     "twine",
 ]
 
+[tool.setuptools.packages.find]
+include = ["aws_excom*"]
+
 [tool.setuptools.package-data]
 aws_excom = ["scripts/*.sh"]
 

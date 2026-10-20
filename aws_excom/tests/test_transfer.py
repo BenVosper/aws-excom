@@ -1,12 +1,8 @@
 import os
 import shlex
 import subprocess
-import uuid
 
-import boto3
 import pytest
-from botocore.config import Config
-from moto.server import ThreadedMotoServer
 
 from aws_excom.transfer import (
     MIB,
@@ -57,26 +53,6 @@ def remote_file(tmp_path):
     path = tmp_path / "it's a file.bin"
     path.write_bytes(os.urandom(40 * MIB + 123))
     return path
-
-
-@pytest.fixture
-def s3_server(aws_credentials):
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    client = boto3.client(
-        "s3",
-        endpoint_url=f"http://{host}:{port}",
-        region_name="eu-west-1",
-        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-    )
-    bucket = f"test-bucket-{uuid.uuid4()}"
-    client.create_bucket(
-        Bucket=bucket,
-        CreateBucketConfiguration={"LocationConstraint": "eu-west-1"},
-    )
-    yield client, bucket
-    server.stop()
 
 
 def test_size_script(s3_server, remote_file):

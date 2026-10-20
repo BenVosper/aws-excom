@@ -8,3 +8,6 @@
 # Python egg metadata, regenerated from source files by setuptools.
 /*.egg-info
 /*.egg
+
+# Default output directory of "aws-excom batch"
+/batch_outputs/

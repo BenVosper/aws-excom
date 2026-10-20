@@ -80,32 +80,50 @@ def build_bootstrap_command(script_url):
     return f"sh -c {shlex.quote(script)}"
 
 
-class S3Transfer:
-    """Owns the S3 side of a single file transfer, including cleanup"""
+class S3Staging:
+    """Objects staged in S3 for a container to fetch, including cleanup"""
 
-    def __init__(self, s3_client, bucket, remote_path):
+    def __init__(self, s3_client, bucket):
         self.s3 = s3_client
         self.bucket = bucket
-        prefix = f"{KEY_PREFIX}/{uuid.uuid4()}"
-        self.key = f"{prefix}/{os.path.basename(remote_path) or 'file'}"
-        self.prefix = prefix
-        self.staged_keys = [self.key]
-        self.remote_path = remote_path
-        self.upload_id = None
-        self.part_count = None
+        self.prefix = f"{KEY_PREFIX}/{uuid.uuid4()}"
+        self.staged_keys = []
 
-    def stage_script(self, name, **variables):
-        """Put a script in S3 and return the command that runs it in the container"""
+    def stage(self, name, body):
+        """Put an object in S3 and return a presigned URL to fetch it"""
         key = f"{self.prefix}/{name}"
-        script = render_script(name, **variables)
-        self.s3.put_object(Bucket=self.bucket, Key=key, Body=script.encode())
+        self.s3.put_object(Bucket=self.bucket, Key=key, Body=body)
         self.staged_keys.append(key)
-        script_url = self.s3.generate_presigned_url(
+        return self.s3.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=URL_EXPIRY_SECONDS,
         )
+
+    def stage_script(self, name, **variables):
+        """Put a script in S3 and return the command that runs it in the container"""
+        script_url = self.stage(name, render_script(name, **variables).encode())
         return build_bootstrap_command(script_url)
+
+    def cleanup(self):
+        if not self.staged_keys:
+            return
+        self.s3.delete_objects(
+            Bucket=self.bucket,
+            Delete={"Objects": [{"Key": key} for key in self.staged_keys]},
+        )
+
+
+class S3Transfer(S3Staging):
+    """Owns the S3 side of a single file transfer, including cleanup"""
+
+    def __init__(self, s3_client, bucket, remote_path):
+        super().__init__(s3_client, bucket)
+        self.key = f"{self.prefix}/{os.path.basename(remote_path) or 'file'}"
+        self.staged_keys.append(self.key)
+        self.remote_path = remote_path
+        self.upload_id = None
+        self.part_count = None
 
     def get_size_command(self):
         return self.stage_script("size.sh", SRC=self.remote_path)
@@ -174,7 +192,4 @@ class S3Transfer:
             self.s3.abort_multipart_upload(
                 Bucket=self.bucket, Key=self.key, UploadId=self.upload_id
             )
-        self.s3.delete_objects(
-            Bucket=self.bucket,
-            Delete={"Objects": [{"Key": key} for key in self.staged_keys]},
-        )
+        super().cleanup()

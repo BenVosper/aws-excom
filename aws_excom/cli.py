@@ -19,8 +19,16 @@ from aws_excom.aws import (
     get_tasks_data,
     get_containers_data,
 )
+from aws_excom.batch import (
+    build_inline_command,
+    get_output_paths,
+    get_task_id,
+    get_timestamp,
+    run_and_save,
+)
 from aws_excom.exceptions import BOTOCORE_EXCEPTIONS
 from aws_excom.transfer import (
+    S3Staging,
     S3Transfer,
     TransferError,
     get_s3_client,
@@ -73,6 +81,45 @@ get_parser.add_argument(
     "-o",
     default=None,
     help="(Optional) Local path to save to. Defaults to the remote filename",
+)
+
+batch_parser = subparsers.add_parser(
+    "batch",
+    help="Run a command on several containers, saving the outputs",
+    description=(
+        "Run a command on one or more containers in one or more clusters, one at a "
+        "time, saving each container's output to a file. Commands are run by 'sh'."
+    ),
+)
+add_common_arguments(batch_parser, default=argparse.SUPPRESS)
+batch_parser.add_argument(
+    "--command",
+    # Kept apart from the top-level '--command' so 'main' can tell them apart
+    dest="batch_command",
+    metavar="COMMAND",
+    default=None,
+    help=(
+        "(Optional) Command to run. With '--command-file', the file is passed to it "
+        "on stdin. Leave blank for an interactive prompt"
+    ),
+)
+batch_parser.add_argument(
+    "--command-file",
+    default=None,
+    help=(
+        "(Optional) Local file to pass to the command on stdin, eg. a script for "
+        "'python manage.py shell'. Staged through S3"
+    ),
+)
+batch_parser.add_argument(
+    "--bucket",
+    default=os.environ.get("AWS_EXCOM_BUCKET"),
+    help=("S3 bucket to stage '--command-file' through. Defaults to $AWS_EXCOM_BUCKET"),
+)
+batch_parser.add_argument(
+    "--output-dir",
+    default="batch_outputs",
+    help="(Optional) Directory to save outputs under. Defaults to 'batch_outputs'",
 )
 
 
@@ -145,48 +192,57 @@ def get_bold_text(text):
     return colored(text, attrs=["bold"])
 
 
-def select_container(session):
-    client = get_ecs_client(session)
+def show_menu(title, entries, multi_select=False):
+    """Indices of the selected entries. Exits if the menu is quit"""
+    if multi_select:
+        keys = "Space or Tab to select, Enter to accept"
+    else:
+        keys = "Enter to select"
+    print(get_bold_text(f"{title} (Arrow keys to move, {keys}, / to search)"))
+    terminal_menu = TerminalMenu(entries, multi_select=multi_select)
+    selected = terminal_menu.show()
+    if selected is None:
+        sys.exit()
+    return list(selected) if multi_select else [selected]
+
+
+def select_clusters(client, multi_select=False):
     cluster_arns = get_cluster_arns(client)
     clusters = get_clusters_data(client, cluster_arns)
-
     cluster_names = [cluster["clusterName"] for cluster in clusters]
 
-    print(
-        get_bold_text(
-            "Select a cluster... (Arrow keys to move, Enter to select, / to search)"
-        )
-    )
-    terminal_menu = TerminalMenu(cluster_names)
-    selected_index = terminal_menu.show()
-    if selected_index is None:
-        sys.exit()
-    selected_cluster_name = cluster_names[selected_index]
-    selected_cluster_data = clusters[selected_index]
-    selected_cluster_arn = selected_cluster_data["clusterArn"]
-    print(f"Cluster: {selected_cluster_name}")
+    title = "Select clusters..." if multi_select else "Select a cluster..."
+    selected_indices = show_menu(title, cluster_names, multi_select)
+    for index in selected_indices:
+        print(f"Cluster: {cluster_names[index]}")
+    return [clusters[index] for index in selected_indices]
 
-    task_arns = get_task_arns(client, selected_cluster_data["clusterArn"])
-    tasks = get_tasks_data(client, selected_cluster_arn, task_arns)
+
+def select_containers(client, cluster, multi_select=False):
+    """Selected containers in the cluster, or an empty list if it has none"""
+    task_arns = get_task_arns(client, cluster["clusterArn"])
+    tasks = get_tasks_data(client, cluster["clusterArn"], task_arns)
     containers = get_containers_data(tasks)
+    if not containers:
+        return []
+    container_names = [*get_container_display_names(containers)]
+
+    title = "Select containers" if multi_select else "Select a container"
+    title += f" in '{cluster['clusterName']}'..."
+    selected_indices = show_menu(title, container_names, multi_select)
+    for index in selected_indices:
+        print(f"Container: {container_names[index]}")
+    return [containers[index] for index in selected_indices]
+
+
+def select_container(session):
+    client = get_ecs_client(session)
+    [cluster] = select_clusters(client)
+    containers = select_containers(client, cluster)
     if not containers:
         print("No containers found. Exiting...")
         sys.exit()
-    container_names = [*get_container_display_names(containers)]
-
-    print(
-        get_bold_text(
-            "Select a container... (Arrow keys to move, Enter to select, / to search)"
-        )
-    )
-    terminal_menu = TerminalMenu(container_names)
-    selected_index = terminal_menu.show()
-    if selected_index is None:
-        sys.exit()
-    selected_container_name = container_names[selected_index]
-    selected_container_data = containers[selected_index]
-    print(f"Container: {selected_container_name}")
-    return selected_cluster_arn, selected_container_data
+    return cluster["clusterArn"], containers[0]
 
 
 def build_aws_cli_command(profile_name=None, region_name=None, command_to_execute=None):
@@ -282,8 +338,109 @@ def run_get(args):
         sys.exit(1)
 
 
+def run_on_containers(
+    command,
+    command_file,
+    bucket,
+    output_dir,
+    profile_name=None,
+    region_name=None,
+):
+    session = get_boto_session(profile_name, region_name)
+    client = get_ecs_client(session)
+    staging = None
+    if command_file:
+        staging = S3Staging(get_s3_client(session, bucket), bucket)
+
+    targets = []
+    for cluster in select_clusters(client, multi_select=True):
+        containers = select_containers(client, cluster, multi_select=True)
+        if not containers:
+            print(f"No containers found in '{cluster['clusterName']}'. Skipping...")
+        targets += [(cluster, container) for container in containers]
+    if not targets:
+        print("No containers selected. Exiting...")
+        sys.exit()
+
+    if not command:
+        if command_file:
+            prompt = f"Type command to pass '{command_file}' to... (Default: 'sh') "
+        else:
+            prompt = "Type command to run... "
+        command = input(get_bold_text(prompt)) or ("sh" if command_file else "")
+        if not command:
+            print("No command given. Exiting...")
+            sys.exit()
+    print(f"Command: '{command}'\n")
+
+    timestamp = get_timestamp()
+
+    results = []
+    try:
+        if staging:
+            with open(command_file, "rb") as f:
+                input_url = staging.stage(os.path.basename(command_file), f.read())
+            remote_command = staging.stage_script(
+                "run.sh", CMD=command, INPUT_URL=input_url
+            )
+        else:
+            remote_command = build_inline_command(command)
+
+        output_paths = get_output_paths(output_dir, timestamp, targets)
+        for number, ((cluster, container), output_path) in enumerate(
+            zip(targets, output_paths), start=1
+        ):
+            cluster_name = cluster["clusterName"]
+            label = f"{cluster_name} / {container['name']} ({get_task_id(container)})"
+            print(get_bold_text(f"[{number}/{len(targets)}] {label}"))
+            args = build_execute_command_args(
+                cluster["clusterArn"],
+                container,
+                remote_command,
+                profile_name,
+                region_name,
+            )
+            status = run_and_save(args, output_path)
+            results.append((label, status, output_path))
+            print()
+    finally:
+        if staging:
+            staging.cleanup()
+
+    print(get_bold_text("Summary"))
+    for label, status, output_path in results:
+        status_text = "unknown" if status is None else str(status)
+        print(f"{label}: exit {status_text} -> {output_path}")
+    return all(status == 0 for _, status, _ in results)
+
+
+def run_batch(args):
+    if args.command_file:
+        if not args.bucket:
+            batch_parser.error(
+                "'--command-file' requires '--bucket' or $AWS_EXCOM_BUCKET"
+            )
+        if not os.path.isfile(args.command_file):
+            batch_parser.error(f"No such file: '{args.command_file}'")
+    try:
+        succeeded = run_on_containers(
+            args.batch_command,
+            args.command_file,
+            args.bucket,
+            args.output_dir,
+            args.profile,
+            args.region,
+        )
+    except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
+        print(error)
+        sys.exit(1)
+    if not succeeded:
+        sys.exit(1)
+
+
 SUBCOMMANDS = {
     "get": run_get,
+    "batch": run_batch,
 }
 
 
