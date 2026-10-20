@@ -26,8 +26,24 @@ After running once, you can run:
 aws-excom --last
 ```
 
-to skip the interactive part of the script and immediately replay the last command you 
-constructed. This may be useful if you accidentally exit a running session.
+to skip selecting a container and reuse the last one you selected, along with its profile and 
+region. It runs the last command you ran in a session (or `bash` if there isn't one), so it's 
+handy for reconnecting if you accidentally exit a running session. To run something else on 
+the same container, pass `--command`:
+
+```shell
+aws-excom --last --command "python manage.py shell"
+```
+
+The `get` and `put` subcommands also take `--last`, and the container is shared between them, 
+eg. after selecting a container with `put`, `aws-excom --last` opens a session on it:
+
+```shell
+aws-excom get /app/logs/big.log --last
+```
+
+If the task has stopped since, eg. after a deploy, run again without `--last` to select 
+another.
 
 By default, all AWS commands will use your default profile and region. To override these, pass 
 the following arguments:

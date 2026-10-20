@@ -1,7 +1,6 @@
 import argparse
 import os
 import sys
-import tempfile
 import readline  # Needed for correct 'input' behaviour
 
 from subprocess import run, PIPE
@@ -27,6 +26,12 @@ from aws_excom.batch import (
     run_and_save,
 )
 from aws_excom.exceptions import BOTOCORE_EXCEPTIONS
+from aws_excom.last_run import (
+    get_last_command,
+    get_last_target,
+    save_last_command,
+    save_last_target,
+)
 from aws_excom.transfer import (
     S3Put,
     S3Staging,
@@ -51,12 +56,30 @@ def add_common_arguments(parser, default=None):
     )
 
 
+def add_last_target_argument(parser):
+    """
+    '--last' for subcommands, which reuses the last selected container. Suppressed
+    so '--last' before the subcommand name works too.
+    """
+    parser.add_argument(
+        "--last",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Use the last selected container instead of selecting one",
+    )
+
+
 parser = argparse.ArgumentParser(
     description="Interactive script to call 'aws ecs execute-command'"
 )
 add_common_arguments(parser)
 parser.add_argument(
-    "--last", action="store_true", help="Run 'execute-command' with last input"
+    "--last",
+    action="store_true",
+    help=(
+        "Use the last selected container instead of selecting one. Runs '--command' "
+        "if given, otherwise the last command run"
+    ),
 )
 parser.add_argument(
     "--command",
@@ -72,6 +95,7 @@ get_parser = subparsers.add_parser(
     description="Download a file from a container via S3",
 )
 add_common_arguments(get_parser, default=argparse.SUPPRESS)
+add_last_target_argument(get_parser)
 get_parser.add_argument("remote_path", help="Path of the file in the container")
 get_parser.add_argument(
     "--bucket",
@@ -93,6 +117,7 @@ put_parser = subparsers.add_parser(
     ),
 )
 add_common_arguments(put_parser, default=argparse.SUPPRESS)
+add_last_target_argument(put_parser)
 put_parser.add_argument("local_path", help="Path of the local file to upload")
 put_parser.add_argument(
     "remote_path",
@@ -153,42 +178,7 @@ batch_parser.add_argument(
 )
 
 
-LAST_RUN_FILENAME_PREFIX = ".aws-excom-last-run"
-TEMPDIR = tempfile.gettempdir()
-
-
-def get_last_run_file_paths():
-    return [
-        os.path.join(TEMPDIR, name)
-        for name in filter(
-            lambda filename: filename.startswith(LAST_RUN_FILENAME_PREFIX),
-            os.listdir(TEMPDIR),
-        )
-    ]
-
-
-def get_last_run_command():
-    last_run_file_paths = get_last_run_file_paths()
-    last_run_command = None
-    if last_run_file_paths:
-        with open(last_run_file_paths[0]) as f:
-            last_run_command = f.read()
-    return last_run_command
-
-
-def cleanup_last_run_files():
-    for path in get_last_run_file_paths():
-        os.remove(path)
-
-
-def write_last_run_file(command):
-    with tempfile.NamedTemporaryFile(
-        "w",
-        dir=TEMPDIR,
-        prefix=LAST_RUN_FILENAME_PREFIX,
-        delete=False,
-    ) as f:
-        f.write(command)
+DEFAULT_COMMAND = "bash"
 
 
 def get_container_display_names(containers):
@@ -275,14 +265,21 @@ def select_container(session):
     return cluster["clusterArn"], containers[0]
 
 
-def build_aws_cli_command(profile_name=None, region_name=None, command_to_execute=None):
+def build_aws_cli_command(
+    profile_name=None, region_name=None, command_to_execute=None, target=None
+):
     session = get_boto_session(profile_name, region_name)
-    selected_cluster_arn, selected_container_data = select_container(session)
+    selected_cluster_arn, selected_container_data = get_or_select_container(
+        session, target, profile_name, region_name
+    )
 
     command = command_to_execute
     if not command:
-        prompt = get_bold_text("Type command to execute... (Default: 'bash') ")
-        command = input(prompt) or "bash"
+        prompt = get_bold_text(
+            f"Type command to execute... (Default: '{DEFAULT_COMMAND}') "
+        )
+        command = input(prompt) or DEFAULT_COMMAND
+    save_last_command(command)
 
     print(f"Command: '{command}'\n")
 
@@ -337,10 +334,51 @@ def get_executor(cluster_arn, container, profile_name=None, region_name=None):
     return execute
 
 
-def get_file(remote_path, bucket, local_path, profile_name=None, region_name=None):
+def get_last_target_or_exit(args):
+    """
+    The last selected container for '--last', filling in the profile and region it
+    was selected with unless others were given
+    """
+    target = get_last_target()
+    if not target:
+        print("No last container found. Try again without '--last'")
+        sys.exit(1)
+    args.profile = args.profile or target["profile"]
+    args.region = args.region or target["region"]
+    return target
+
+
+def get_or_select_container(session, target, profile_name=None, region_name=None):
+    """
+    The container from a saved target if given, otherwise one selected from the menus.
+    Saved as the last target either way.
+    """
+    if target:
+        cluster_arn, container = target["cluster_arn"], target["container"]
+        print(f"Container: {container['name']} (last selected)")
+    else:
+        cluster_arn, container = select_container(session)
+    save_last_target(cluster_arn, container, profile_name, region_name)
+    return cluster_arn, container
+
+
+def print_transfer_error(error, last):
+    print(error)
+    if last:
+        print(
+            "The last selected task may have stopped since. "
+            "Try again without '--last'"
+        )
+
+
+def get_file(
+    remote_path, bucket, local_path, profile_name=None, region_name=None, target=None
+):
     session = get_boto_session(profile_name, region_name)
     s3 = get_s3_client(session, bucket)
-    cluster_arn, container = select_container(session)
+    cluster_arn, container = get_or_select_container(
+        session, target, profile_name, region_name
+    )
     execute = get_executor(cluster_arn, container, profile_name, region_name)
 
     transfer = S3Transfer(s3, bucket, remote_path)
@@ -368,10 +406,18 @@ def get_file(remote_path, bucket, local_path, profile_name=None, region_name=Non
 def run_get(args):
     if not args.bucket:
         get_parser.error("requires '--bucket' or $AWS_EXCOM_BUCKET")
+    target = get_last_target_or_exit(args) if args.last else None
     try:
-        get_file(args.remote_path, args.bucket, args.output, args.profile, args.region)
+        get_file(
+            args.remote_path,
+            args.bucket,
+            args.output,
+            args.profile,
+            args.region,
+            target,
+        )
     except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
-        print(error)
+        print_transfer_error(error, args.last)
         sys.exit(1)
 
 
@@ -381,14 +427,22 @@ def confirm(prompt):
 
 
 def put_file(
-    local_path, remote_path, bucket, force=False, profile_name=None, region_name=None
+    local_path,
+    remote_path,
+    bucket,
+    force=False,
+    profile_name=None,
+    region_name=None,
+    target=None,
 ):
     if remote_path.endswith("/"):
         remote_path += os.path.basename(local_path)
 
     session = get_boto_session(profile_name, region_name)
     s3 = get_s3_client(session, bucket)
-    cluster_arn, container = select_container(session)
+    cluster_arn, container = get_or_select_container(
+        session, target, profile_name, region_name
+    )
     execute = get_executor(cluster_arn, container, profile_name, region_name)
 
     transfer = S3Put(s3, bucket, local_path, remote_path)
@@ -421,6 +475,7 @@ def run_put(args):
         put_parser.error("requires '--bucket' or $AWS_EXCOM_BUCKET")
     if not os.path.isfile(args.local_path):
         put_parser.error(f"No such file: '{args.local_path}'")
+    target = get_last_target_or_exit(args) if args.last else None
     try:
         put_file(
             args.local_path,
@@ -429,9 +484,10 @@ def run_put(args):
             args.force,
             args.profile,
             args.region,
+            target,
         )
     except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
-        print(error)
+        print_transfer_error(error, args.last)
         sys.exit(1)
 
 
@@ -540,29 +596,23 @@ SUBCOMMANDS = {
     "put": run_put,
     "batch": run_batch,
 }
+SUBCOMMANDS_WITH_LAST = {"get", "put"}
 
 
 def run_execute_command(args):
-    profile = args.profile
-    region = args.region
+    target = None
     command = args.command
-
-    last_run_command = get_last_run_command()
-
     if args.last:
-        if not last_run_command:
-            print("No last run found. Try again with default arguments")
-            sys.exit(0)
-        aws_cli_command = last_run_command
-    else:
-        try:
-            aws_cli_command = build_aws_cli_command(profile, region, command)
-        except (*BOTOCORE_EXCEPTIONS,) as error:
-            print(error)
-            sys.exit(1)
+        target = get_last_target_or_exit(args)
+        command = command or get_last_command() or DEFAULT_COMMAND
 
-    cleanup_last_run_files()
-    write_last_run_file(aws_cli_command)
+    try:
+        aws_cli_command = build_aws_cli_command(
+            args.profile, args.region, command, target
+        )
+    except (*BOTOCORE_EXCEPTIONS,) as error:
+        print(error)
+        sys.exit(1)
 
     print("Starting session. Ctrl-D to exit.")
     with ignore_user_entered_signals():
@@ -577,10 +627,10 @@ def main():
     args = parser.parse_args()
 
     if args.subcommand:
-        if args.last or args.command:
-            parser.error(
-                f"'--last' and '--command' can't be used with '{args.subcommand}'"
-            )
+        if args.command:
+            parser.error(f"'--command' can't be used with '{args.subcommand}'")
+        if args.last and args.subcommand not in SUBCOMMANDS_WITH_LAST:
+            parser.error(f"'--last' can't be used with '{args.subcommand}'")
         SUBCOMMANDS[args.subcommand](args)
         return
 

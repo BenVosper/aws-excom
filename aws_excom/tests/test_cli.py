@@ -1,6 +1,9 @@
+import sys
+from unittest import mock
+
 import pytest
 
-from aws_excom.cli import parser
+from aws_excom.cli import main, parser
 
 
 def test_no_subcommand():
@@ -30,3 +33,26 @@ def test_put_force():
     args = parser.parse_args(["put", "local.txt", "/app/", "-f"])
     assert args.force is True
     assert parser.parse_args(["put", "local.txt", "/app/"]).force is False
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["get", "/x", "--last"],
+        ["--last", "get", "/x"],
+        ["put", "local.txt", "/app/", "--last"],
+    ],
+)
+def test_last_with_subcommand(argv):
+    assert parser.parse_args(argv).last is True
+
+
+def test_last_defaults_to_false_with_subcommand():
+    assert parser.parse_args(["get", "/x"]).last is False
+
+
+def test_last_not_allowed_with_batch(capsys):
+    with mock.patch.object(sys, "argv", ["aws-excom", "--last", "batch"]):
+        with pytest.raises(SystemExit):
+            main()
+    assert "'--last' can't be used with 'batch'" in capsys.readouterr().err
