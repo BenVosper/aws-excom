@@ -24,3 +24,9 @@ def test_common_arguments_either_side_of_subcommand(argv):
     assert args.remote_path == "/x"
     assert args.profile == "p"
     assert args.region == "r"
+
+
+def test_put_force():
+    args = parser.parse_args(["put", "local.txt", "/app/", "-f"])
+    assert args.force is True
+    assert parser.parse_args(["put", "local.txt", "/app/"]).force is False

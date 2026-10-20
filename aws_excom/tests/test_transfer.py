@@ -7,10 +7,12 @@ import pytest
 from aws_excom.transfer import (
     MIB,
     MAX_PARTS,
+    S3Put,
     S3Transfer,
     TransferError,
     get_part_count,
     get_part_size_mib,
+    parse_existing_size_output,
     parse_size_output,
 )
 
@@ -108,3 +110,84 @@ def test_incomplete_upload_is_aborted(s3_server, remote_file):
 
     assert "Uploads" not in s3.list_multipart_uploads(Bucket=bucket)
     assert "Contents" not in s3.list_objects_v2(Bucket=bucket)
+
+
+def test_parse_existing_size_output():
+    assert parse_existing_size_output("AWS_EXCOM_SIZE=12\r\n") == 12
+    assert parse_existing_size_output("No such file: /app/x\r\n") is None
+
+    # Session failed, so it's unknown whether the file exists
+    with pytest.raises(TransferError):
+        parse_existing_size_output("An error occurred (TargetNotConnectedException)")
+
+
+def put(s3_server, local_path, remote_path):
+    """Put a file as 'aws-excom put' does, returning the output of 'put.sh'"""
+    s3, bucket = s3_server
+    transfer = S3Put(s3, bucket, str(local_path), str(remote_path))
+    transfer.upload()
+    result = run_as_container(transfer.get_put_command())
+    try:
+        transfer.check(result.stdout)
+    finally:
+        transfer.cleanup()
+    assert "Contents" not in s3.list_objects_v2(Bucket=bucket)
+    return result.stdout
+
+
+def test_put_round_trip(s3_server, remote_file, tmp_path):
+    destination = tmp_path / "destination" / "it's put.bin"
+    destination.parent.mkdir()
+
+    put(s3_server, remote_file, destination)
+
+    assert destination.read_bytes() == remote_file.read_bytes()
+    assert [path.name for path in destination.parent.iterdir()] == ["it's put.bin"]
+
+
+def test_put_size_check_of_existing_file(s3_server, remote_file):
+    s3, bucket = s3_server
+    transfer = S3Put(s3, bucket, "local.bin", str(remote_file))
+
+    result = run_as_container(transfer.get_size_command())
+    assert parse_existing_size_output(result.stdout) == remote_file.stat().st_size
+    transfer.cleanup()
+
+
+def test_put_overwrite_keeps_permissions(s3_server, tmp_path):
+    local_path = tmp_path / "new.sh"
+    local_path.write_text("echo new\n")
+    destination = tmp_path / "existing.sh"
+    destination.write_text("echo old, and longer\n")
+    destination.chmod(0o750)
+
+    put(s3_server, local_path, destination)
+
+    assert destination.read_text() == "echo new\n"
+    assert destination.stat().st_mode & 0o777 == 0o750
+
+
+@pytest.mark.parametrize(
+    "remote_path, message",
+    [
+        ("{tmp}", "Is a directory: {tmp}"),
+        ("{tmp}/nope/file.txt", "No such directory: {tmp}/nope"),
+    ],
+)
+def test_put_bad_destination(s3_server, tmp_path, remote_path, message):
+    local_path = tmp_path / "file.txt"
+    local_path.write_text("hello")
+    remote_path = remote_path.format(tmp=tmp_path)
+
+    with pytest.raises(TransferError, match=message.format(tmp=tmp_path)):
+        put(s3_server, local_path, remote_path)
+
+
+def test_put_size_mismatch(s3_server, tmp_path):
+    s3, bucket = s3_server
+    local_path = tmp_path / "file.txt"
+    local_path.write_text("hello")
+    transfer = S3Put(s3, bucket, str(local_path), "/app/file.txt")
+
+    with pytest.raises(TransferError, match="Expected 5 bytes"):
+        transfer.check("AWS_EXCOM_SIZE=3\r\n")

@@ -28,10 +28,12 @@ from aws_excom.batch import (
 )
 from aws_excom.exceptions import BOTOCORE_EXCEPTIONS
 from aws_excom.transfer import (
+    S3Put,
     S3Staging,
     S3Transfer,
     TransferError,
     get_s3_client,
+    parse_existing_size_output,
     parse_size_output,
 )
 
@@ -81,6 +83,34 @@ get_parser.add_argument(
     "-o",
     default=None,
     help="(Optional) Local path to save to. Defaults to the remote filename",
+)
+
+put_parser = subparsers.add_parser(
+    "put",
+    help="Upload a file to a container via S3",
+    description=(
+        "Upload a file to a container via S3. Asks before overwriting an existing file"
+    ),
+)
+add_common_arguments(put_parser, default=argparse.SUPPRESS)
+put_parser.add_argument("local_path", help="Path of the local file to upload")
+put_parser.add_argument(
+    "remote_path",
+    help=(
+        "Path to save to in the container. If it ends with '/', the local filename "
+        "is added"
+    ),
+)
+put_parser.add_argument(
+    "--bucket",
+    default=os.environ.get("AWS_EXCOM_BUCKET"),
+    help="S3 bucket to stage the upload through. Defaults to $AWS_EXCOM_BUCKET",
+)
+put_parser.add_argument(
+    "--force",
+    "-f",
+    action="store_true",
+    help="Overwrite an existing file in the container without asking",
 )
 
 batch_parser = subparsers.add_parser(
@@ -294,10 +324,8 @@ def build_execute_command_args(
     return args
 
 
-def get_file(remote_path, bucket, local_path, profile_name=None, region_name=None):
-    session = get_boto_session(profile_name, region_name)
-    s3 = get_s3_client(session, bucket)
-    cluster_arn, container = select_container(session)
+def get_executor(cluster_arn, container, profile_name=None, region_name=None):
+    """Function that runs a command in the container, passing kwargs to 'run'"""
 
     def execute(command, **kwargs):
         args = build_execute_command_args(
@@ -305,6 +333,15 @@ def get_file(remote_path, bucket, local_path, profile_name=None, region_name=Non
         )
         with ignore_user_entered_signals():
             return run(args, check=False, **kwargs)
+
+    return execute
+
+
+def get_file(remote_path, bucket, local_path, profile_name=None, region_name=None):
+    session = get_boto_session(profile_name, region_name)
+    s3 = get_s3_client(session, bucket)
+    cluster_arn, container = select_container(session)
+    execute = get_executor(cluster_arn, container, profile_name, region_name)
 
     transfer = S3Transfer(s3, bucket, remote_path)
     local_path = local_path or os.path.basename(remote_path)
@@ -333,6 +370,66 @@ def run_get(args):
         get_parser.error("requires '--bucket' or $AWS_EXCOM_BUCKET")
     try:
         get_file(args.remote_path, args.bucket, args.output, args.profile, args.region)
+    except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
+        print(error)
+        sys.exit(1)
+
+
+def confirm(prompt):
+    answer = input(get_bold_text(f"{prompt} [y/N] "))
+    return answer.strip().lower() in ("y", "yes")
+
+
+def put_file(
+    local_path, remote_path, bucket, force=False, profile_name=None, region_name=None
+):
+    if remote_path.endswith("/"):
+        remote_path += os.path.basename(local_path)
+
+    session = get_boto_session(profile_name, region_name)
+    s3 = get_s3_client(session, bucket)
+    cluster_arn, container = select_container(session)
+    execute = get_executor(cluster_arn, container, profile_name, region_name)
+
+    transfer = S3Put(s3, bucket, local_path, remote_path)
+    try:
+        if not force:
+            print(f"Checking for '{remote_path}'...")
+            result = execute(transfer.get_size_command(), stdout=PIPE, text=True)
+            existing_size = parse_existing_size_output(result.stdout)
+            if existing_size is not None:
+                prompt = (
+                    f"'{remote_path}' already exists ({existing_size:,} bytes). "
+                    "Overwrite?"
+                )
+                if not confirm(prompt):
+                    print("Cancelled")
+                    return
+
+        print(f"Uploading '{local_path}' to s3://{bucket}/{transfer.key}...")
+        transfer.upload()
+        print(f"Saving to '{remote_path}' in container...")
+        result = execute(transfer.get_put_command(), stdout=PIPE, text=True)
+        transfer.check(result.stdout)
+    finally:
+        transfer.cleanup()
+    print("Done")
+
+
+def run_put(args):
+    if not args.bucket:
+        put_parser.error("requires '--bucket' or $AWS_EXCOM_BUCKET")
+    if not os.path.isfile(args.local_path):
+        put_parser.error(f"No such file: '{args.local_path}'")
+    try:
+        put_file(
+            args.local_path,
+            args.remote_path,
+            args.bucket,
+            args.force,
+            args.profile,
+            args.region,
+        )
     except (TransferError, *BOTOCORE_EXCEPTIONS) as error:
         print(error)
         sys.exit(1)
@@ -440,6 +537,7 @@ def run_batch(args):
 
 SUBCOMMANDS = {
     "get": run_get,
+    "put": run_put,
     "batch": run_batch,
 }
 

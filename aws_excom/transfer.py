@@ -1,5 +1,5 @@
 """
-Pull files out of a running container via S3 multipart upload.
+Move files in and out of a running container via S3.
 
 The container never needs AWS credentials or the AWS CLI - only 'sh', 'dd' and
 'curl'. All signing happens locally.
@@ -8,10 +8,19 @@ Scripts run in the container live in 'scripts/'. Each is staged in S3 with its i
 prepended and fetched by a one-line 'curl | sh', so the command passed to
 'execute-command' stays short however many parts there are.
 
+To get a file, via S3 multipart upload:
+
 1. Run 'size.sh' in the container to get the file's size.
 2. Create a multipart upload and presign one 'UploadPart' URL per part.
 3. Run 'upload.sh' in the container. It slices the file with 'dd' and PUTs each slice.
 4. Check the parts landed, complete the upload, download the object and clean up.
+
+To put a file:
+
+1. Run 'size.sh' in the container to check whether the file already exists.
+2. Upload the file to S3 and presign a 'GetObject' URL for it.
+3. Run 'put.sh' in the container. It downloads the file and prints its size.
+4. Check the size matches and clean up.
 """
 
 import math
@@ -31,6 +40,8 @@ KEY_PREFIX = "aws-excom"
 
 SCRIPTS_DIR = pathlib.Path(__file__).parent / "scripts"
 SIZE_PATTERN = re.compile(r"AWS_EXCOM_SIZE=(\d+)")
+# Printed by 'size.sh'
+NO_FILE_MESSAGE = "No such file: "
 
 
 class TransferError(Exception):
@@ -65,6 +76,13 @@ def parse_size_output(output):
     if not match:
         raise TransferError(f"Couldn't determine remote file size. Output:\n{output}")
     return int(match.group(1))
+
+
+def parse_existing_size_output(output):
+    """Size of the remote file from 'size.sh', or None if there's no such file"""
+    if NO_FILE_MESSAGE in output:
+        return None
+    return parse_size_output(output)
 
 
 def render_script(name, **variables):
@@ -193,3 +211,41 @@ class S3Transfer(S3Staging):
                 Bucket=self.bucket, Key=self.key, UploadId=self.upload_id
             )
         super().cleanup()
+
+
+class S3Put(S3Staging):
+    """Owns the S3 side of putting a single file into a container, including cleanup"""
+
+    def __init__(self, s3_client, bucket, local_path, remote_path):
+        super().__init__(s3_client, bucket)
+        self.key = f"{self.prefix}/{os.path.basename(local_path)}"
+        self.local_path = local_path
+        self.remote_path = remote_path
+
+    def get_size_command(self):
+        return self.stage_script("size.sh", SRC=self.remote_path)
+
+    def upload(self):
+        self.s3.upload_file(self.local_path, self.bucket, self.key)
+        self.staged_keys.append(self.key)
+
+    def get_put_command(self):
+        url = self.s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.bucket, "Key": self.key},
+            ExpiresIn=URL_EXPIRY_SECONDS,
+        )
+        return self.stage_script("put.sh", DEST=self.remote_path, URL=url)
+
+    def check(self, output):
+        """Check the output of 'put.sh' shows the whole file arrived"""
+        match = SIZE_PATTERN.search(output)
+        if not match:
+            raise TransferError(f"Couldn't put file in container. Output:\n{output}")
+        remote_size = int(match.group(1))
+        local_size = os.path.getsize(self.local_path)
+        if remote_size != local_size:
+            raise TransferError(
+                f"Expected {local_size:,} bytes in container but found "
+                f"{remote_size:,}. Output:\n{output}"
+            )

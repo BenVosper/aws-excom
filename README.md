@@ -71,6 +71,22 @@ space. Staged objects are deleted once downloaded. Your local credentials need
 `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:ListMultipartUploadParts`, 
 `s3:AbortMultipartUpload` and `s3:GetBucketLocation` on the bucket.
 
+## Uploading files
+
+To put a file into a container, use the `put` subcommand, staged through S3 in the same way:
+
+```shell
+aws-excom put fixtures.json /app/fixtures.json --bucket my-bucket
+aws-excom put fixtures.json /app/  # Keeps the local filename
+```
+
+If the file already exists in the container, you'll be asked before it's overwritten, unless 
+you pass `--force`. An overwritten file keeps its permissions and owner.
+
+The container fetches the file from a presigned URL with `curl`, so again needs no AWS 
+credentials. It's downloaded beside the destination first, so the destination's filesystem 
+needs room for two copies while it's copied into place.
+
 ## Running a command on several containers
 
 To run one command across containers in one or more clusters, use the `batch` subcommand:

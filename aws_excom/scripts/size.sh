@@ -8,6 +8,7 @@ set -eu
 : "${SRC:?}"
 
 if [ ! -f "$SRC" ]; then
+    # Message is matched by aws_excom.transfer.NO_FILE_MESSAGE
     echo "No such file: $SRC"
     exit 1
 fi
