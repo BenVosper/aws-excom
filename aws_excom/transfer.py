@@ -94,7 +94,9 @@ def render_script(name, **variables):
 
 
 def build_bootstrap_command(script_url):
-    script = f"curl -sSf {shlex.quote(script_url)} | sh"
+    # Ctrl-C reaches this shell too. Without a handler, some shells (eg. 'dash') are
+    # killed by it, ending the session before the script can finish
+    script = f"trap : INT; curl -sSf {shlex.quote(script_url)} | sh"
     return f"sh -c {shlex.quote(script)}"
 
 
