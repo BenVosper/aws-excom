@@ -43,7 +43,7 @@ def get_task_arns(ecs_client, cluster_arn):
     next_token = response.get("nextToken", None)
     while next_token:
         response = ecs_client.list_tasks(cluster=cluster_arn, nextToken=next_token)
-        task_arns.extend(response["clusterArns"])
+        task_arns.extend(response["taskArns"])
         next_token = response.get("nextToken", None)
     return task_arns
 
