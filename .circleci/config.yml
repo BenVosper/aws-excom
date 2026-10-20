@@ -41,7 +41,7 @@ commands:
 jobs:
   lint:
     docker:
-      - image: cimg/python:3.10.2
+      - image: cimg/python:3.14.8
     steps:
       - checkout
       - install-package-dev
@@ -51,7 +51,7 @@ jobs:
 
   test:
     docker:
-      - image: cimg/python:3.10.2
+      - image: cimg/python:3.14.8
     steps:
       - checkout
       - install-package-dev
@@ -61,7 +61,7 @@ jobs:
 
   deploy:
     docker:
-      - image: cimg/python:3.10.2
+      - image: cimg/python:3.14.8
     steps:
       - checkout
       - install-package-deploy

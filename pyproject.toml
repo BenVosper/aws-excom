@@ -27,12 +27,18 @@ dev = [
     "pytest",
     "pytest-virtualenv",
     "black",
-    "moto",
+    "moto[server] >= 5",
 ]
 deploy = [
     "build",
     "twine",
 ]
+
+[tool.setuptools.packages.find]
+include = ["aws_excom*"]
+
+[tool.setuptools.package-data]
+aws_excom = ["scripts/*.sh"]
 
 [project.scripts]
 "aws-excom" = "aws_excom.cli:main"

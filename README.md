@@ -26,8 +26,24 @@ After running once, you can run:
 aws-excom --last
 ```
 
-to skip the interactive part of the script and immediately replay the last command you 
-constructed. This may be useful if you accidentally exit a running session.
+to skip selecting a container and reuse the last one you selected, along with its profile and 
+region. It runs the last command you ran in a session (or `bash` if there isn't one), so it's 
+handy for reconnecting if you accidentally exit a running session. To run something else on 
+the same container, pass `--command`:
+
+```shell
+aws-excom --last --command "python manage.py shell"
+```
+
+The `get` and `put` subcommands also take `--last`, and the container is shared between them, 
+eg. after selecting a container with `put`, `aws-excom --last` opens a session on it:
+
+```shell
+aws-excom get /app/logs/big.log --last
+```
+
+If the task has stopped since, eg. after a deploy, run again without `--last` to select 
+another.
 
 By default, all AWS commands will use your default profile and region. To override these, pass 
 the following arguments:
@@ -50,6 +66,83 @@ This is handy for writing aliases for common commands:
 
 #!/bin/sh
 aws-excom --command "python3 manage.py shell" "$@"
+```
+
+## Downloading files
+
+To pull a file out of a container, use the `get` subcommand with an S3 bucket to stage it 
+through:
+
+```shell
+aws-excom get /app/logs/big.log --bucket my-bucket [--output big.log]
+```
+
+Set `AWS_EXCOM_BUCKET` to avoid passing `--bucket` every time.
+
+The file is uploaded with an S3 multipart upload (up to 5 TB) using URLs presigned with 
+your local credentials, so the container needs no AWS credentials or CLI - only `sh`, `dd`, 
+`curl` and network access to S3. Each part is buffered to `$TMPDIR` (or `/tmp`) in the 
+container, so it needs at least one part's worth (16 MiB for files under ~160 GB) of free 
+space. Staged objects are deleted once downloaded. Your local credentials need 
+`s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:ListMultipartUploadParts`, 
+`s3:AbortMultipartUpload` and `s3:GetBucketLocation` on the bucket.
+
+## Uploading files
+
+To put a file into a container, use the `put` subcommand, staged through S3 in the same way:
+
+```shell
+aws-excom put fixtures.json /app/fixtures.json --bucket my-bucket
+aws-excom put fixtures.json /app/  # Keeps the local filename
+```
+
+If the file already exists in the container, you'll be asked before it's overwritten, unless 
+you pass `--force`. An overwritten file keeps its permissions and owner.
+
+The container fetches the file from a presigned URL with `curl`, so again needs no AWS 
+credentials. It's downloaded beside the destination first, so the destination's filesystem 
+needs room for two copies while it's copied into place.
+
+## Running a command on several containers
+
+To run one command across containers in one or more clusters, use the `batch` subcommand:
+
+```shell
+aws-excom batch --command "python manage.py migrate foo 0003"
+```
+
+You'll be asked to pick one or more clusters, then one or more containers in each 
+(Space or Tab to select, Enter to accept). The command is run on each container in turn 
+by `sh`, and each container's output is saved to its own file in `batch_outputs/` (or 
+`--output-dir`), named with the run's timestamp, cluster and container. Containers with 
+the same name in the same cluster are numbered:
+
+```
+batch_outputs/
+├── 20261020-130523_prod-eu_gunicorn.txt
+├── 20261020-130523_prod-us_gunicorn_1.txt
+└── 20261020-130523_prod-us_gunicorn_2.txt
+```
+
+A summary of exit statuses is printed at the end. `execute-command` doesn't report the 
+command's exit status, so the command is run between two markers printed by `aws-excom`: 
+`AWS_EXCOM_START` before and `AWS_EXCOM_EXIT=<status>` after. Saved outputs are trimmed to 
+what's between them, leaving out the session's own start and exit lines. If the command 
+never started (eg. the session failed to connect), the whole output is saved instead.
+
+For anything longer than a one-liner, pass `--command-file`. The file is staged through S3 
+(see [Downloading files](#downloading-files) for the bucket setup and requirements) and passed 
+to the command on stdin, as if running `<command> < <file>` in the container. Eg. to run a 
+Python script:
+
+```shell
+aws-excom batch --command "python" --command-file script.py --bucket my-bucket
+```
+
+Or to run a script in the Django shell, with models and settings available:
+
+```shell
+aws-excom batch --command "python manage.py shell" --command-file analytics.py --bucket my-bucket
 ```
 
 ## Local Development
