@@ -4,6 +4,8 @@ import sys
 from os import environ
 from shutil import rmtree
 from subprocess import run
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 rmtree("./dist", ignore_errors=True)
 
@@ -35,12 +37,20 @@ release_data = {
     "name": new_version,
     "body": new_version_pypi_url,
 }
-run(
-    f"""curl -X POST \
-        -H "Accept: application/vnd.github.v3+json" \
-        -H "Authorization: Bearer {environ['RELEASE_TOKEN']}" \
-        -d '{json.dumps(release_data)}' \
-        https://api.github.com/repos/BenVosper/aws-excom/releases
-    """,
-    shell=True,
+request = Request(
+    "https://api.github.com/repos/BenVosper/aws-excom/releases",
+    data=json.dumps(release_data).encode(),
+    headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {environ['RELEASE_TOKEN']}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    },
+    method="POST",
 )
+try:
+    with urlopen(request, timeout=30) as response:
+        print(f"Created GitHub release: {json.load(response)['html_url']}")
+except HTTPError as error:
+    print(f"Failed to create GitHub release: {error.code} {error.reason}")
+    print(error.read().decode())
+    sys.exit(1)
